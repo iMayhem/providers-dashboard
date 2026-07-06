@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Providers Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f0f0f; color: #e0e0e0; padding: 20px;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 20px; color: #fff; }
+  .tabs { display: flex; gap: 10px; margin-bottom: 15px; }
+  .tab {
+    padding: 8px 20px; border-radius: 8px; cursor: pointer;
+    background: #1a1a1a; border: 1px solid #333; color: #888;
+    font-size: 0.9rem;
+  }
+  .tab.active { background: #333; color: #fff; border-color: #555; }
+  .provider { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: #1a1a1a; border-radius: 8px; margin-bottom: 6px; border: 1px solid #222; }
+  .provider.disabled-row { opacity: 0.4; }
+  .provider .handle { cursor: pointer; color: #555; font-size: 1rem; user-select: none; padding: 2px 4px; border-radius: 4px; }
+  .provider .handle:hover { color: #fff; background: #333; }
+  .provider .info { flex: 1; min-width: 0; }
+  .provider .name { font-weight: 600; font-size: 0.95rem; color: #fff; }
+  .provider .meta { font-size: 0.75rem; color: #666; margin-top: 2px; }
+  .provider .flags { display: inline-flex; gap: 4px; margin-left: 8px; }
+  .provider .flag { font-size: 0.65rem; padding: 1px 5px; border-radius: 4px; background: #2a2a2a; color: #888; }
+  .provider .actions { display: flex; gap: 6px; }
+  .provider .actions button {
+    background: none; border: 1px solid #333; color: #888; cursor: pointer;
+    padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; transition: 0.15s; white-space: nowrap;
+  }
+  .provider .actions button:hover { border-color: #555; color: #fff; }
+  .provider .actions button.enabled { color: #4caf50; border-color: #1a4a1a; }
+  .provider .actions button.enabled:hover { border-color: #4caf50; }
+  .provider .actions button.danger { color: #ff4444; border-color: #442222; }
+  .provider .actions button.danger:hover { border-color: #ff4444; }
+  .header-actions { display: flex; gap: 10px; margin-bottom: 15px; align-items: center; }
+  .header-actions button {
+    padding: 6px 16px; border-radius: 6px; cursor: pointer;
+    border: 1px solid #333; background: #1a1a1a; color: #aaa; font-size: 0.85rem;
+  }
+  .header-actions button:hover { border-color: #555; color: #fff; }
+  .search {
+    width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid #333;
+    background: #1a1a1a; color: #e0e0e0; font-size: 0.9rem; margin-bottom: 15px;
+    outline: none;
+  }
+  .search:focus { border-color: #555; }
+  .toast {
+    position: fixed; bottom: 20px; right: 20px; padding: 10px 20px;
+    border-radius: 8px; background: #333; color: #fff; font-size: 0.85rem;
+    opacity: 0; transition: opacity 0.3s; z-index: 100;
+  }
+  .toast.show { opacity: 1; }
+  .count { font-size: 0.8rem; color: #555; margin-bottom: 10px; }
+  .pos-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 24px; border-radius: 6px; background: #252525;
+    color: #666; font-size: 0.75rem; font-weight: 700;
+  }
+</style>
+</head>
+<body>
+<h1>&#x2699; Providers Dashboard</h1>
+
+<div class="header-actions">
+  <span style="color:#888;font-size:0.85rem" id="status">Changes saved automatically</span>
+  <button onclick="resetAll()">&#x21BA; Reset to Defaults</button>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('sources')" id="tab-sources">Sources</div>
+  <div class="tab" onclick="switchTab('embeds')" id="tab-embeds">Embeds</div>
+</div>
+
+<input class="search" id="search" placeholder="Search..." oninput="render()" />
+
+<div id="sources-section">
+  <div class="count" id="source-count"></div>
+  <div id="source-list"></div>
+</div>
+<div id="embeds-section" style="display:none">
+  <div class="count" id="embed-count"></div>
+  <div id="embed-list"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let data = { sources: [], embeds: [] };
+let config = { sources: {}, embeds: {}, sourceOrder: [] };
+let currentTab = "sources";
+let saveTimer = null;
+
+async function loadProviders() {
+  const [provRes, configRes] = await Promise.all([
+    fetch("/api/providers"),
+    fetch("/api/providers/config"),
+  ]);
+  data = await provRes.json();
+  config = await configRes.json();
+  render();
+}
+
+function getSorted(type) {
+  const items = type === "sources" ? [...data.sources] : [...data.embeds];
+  const configKey = type === "sources" ? "sources" : "embeds";
+  items.sort(function(a, b) {
+    const ra = config[configKey][a.id]?.rank != null ? config[configKey][a.id].rank : a.rank;
+    const rb = config[configKey][b.id]?.rank != null ? config[configKey][b.id].rank : b.rank;
+    return rb - ra;
+  });
+  return items;
+}
+
+function render() {
+  const q = document.getElementById("search").value.toLowerCase();
+  const sources = getSorted("sources").filter(function(p) { return p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q); });
+  const embeds = getSorted("embeds").filter(function(p) { return p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q); });
+  document.getElementById("source-count").textContent = sources.length + " sources";
+  document.getElementById("embed-count").textContent = embeds.length + " embeds";
+  renderList("source-list", sources, "source");
+  renderList("embed-list", embeds, "embed");
+}
+
+function renderList(containerId, items, type) {
+  const container = document.getElementById(containerId);
+  const configKey = type === "source" ? "sources" : "embeds";
+  container.innerHTML = items.map(function(p, idx) {
+    const userDisabled = config[configKey][p.id]?.disabled === true;
+    const builtinDisabled = p.disabled === true;
+    const effectiveDisabled = builtinDisabled || userDisabled;
+    const btnClass = userDisabled ? "enabled" : "danger";
+    const btnText = userDisabled ? "&#x2713; Enable" : "&#x2715; Disable";
+    const dispRank = config[configKey][p.id]?.rank != null ? config[configKey][p.id].rank : p.rank;
+    return '<div class="provider' + (effectiveDisabled ? " disabled-row" : "") + '">' +
+      '<span class="pos-badge">' + (idx + 1) + '</span>' +
+      '<div class="handle" onclick="moveUp(\'' + p.id + '\',\'' + type + '\')" title="Move up">&#x25B2;</div>' +
+      '<div class="handle" onclick="moveDown(\'' + p.id + '\',\'' + type + '\')" title="Move down">&#x25BC;</div>' +
+      '<div class="info">' +
+        '<div class="name">' + p.name +
+          '<span class="flags">' + (p.flags||[]).map(function(f) { return "<span class=flag>" + f + "</span>"; }).join("") + '</span>' +
+        '</div>' +
+        '<div class="meta">' + p.id + (p.externalSource ? " &middot; external" : "") + (builtinDisabled ? " &middot; builtin disabled" : "") + '</div>' +
+      '</div>' +
+      '<div class="actions">' +
+        '<button class="' + btnClass + '" onclick="toggle(\'' + p.id + '\',\'' + type + '\')">' + btnText + '</button>' +
+      '</div>' +
+    '</div>';
+  }).join("");
+}
+
+function moveUp(id, type) {
+  const configKey = type === "source" ? "sources" : "embeds";
+  const items = getSorted(type + "s");
+  const idx = items.findIndex(function(p) { return p.id === id; });
+  if (idx <= 0) return;
+  doMove(items, idx, idx - 1, configKey);
+  render();
+  scheduleSave();
+}
+
+function moveDown(id, type) {
+  const configKey = type === "source" ? "sources" : "embeds";
+  const items = getSorted(type + "s");
+  const idx = items.findIndex(function(p) { return p.id === id; });
+  if (idx < 0 || idx >= items.length - 1) return;
+  doMove(items, idx, idx + 1, configKey);
+  render();
+  scheduleSave();
+}
+
+function doMove(items, from, to, configKey) {
+  const a = items[from];
+  const b = items[to];
+  const aRank = config[configKey][a.id]?.rank != null ? config[configKey][a.id].rank : a.rank;
+  const bRank = config[configKey][b.id]?.rank != null ? config[configKey][b.id].rank : b.rank;
+  if (!config[configKey][a.id]) config[configKey][a.id] = {};
+  if (!config[configKey][b.id]) config[configKey][b.id] = {};
+  config[configKey][a.id].rank = bRank;
+  config[configKey][b.id].rank = aRank;
+}
+
+function toggle(id, type) {
+  const configKey = type === "source" ? "sources" : "embeds";
+  if (!config[configKey][id]) config[configKey][id] = {};
+  config[configKey][id].disabled = !(config[configKey][id].disabled === true);
+  render();
+  scheduleSave();
+}
+
+function scheduleSave() {
+  document.getElementById("status").textContent = "Unsaved changes...";
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveAll, 800);
+}
+
+async function saveAll() {
+  const status = document.getElementById("status");
+  const toast = document.getElementById("toast");
+  try {
+    const allSids = getSorted("sources").map(function(p) { return p.id; });
+    const allEids = getSorted("embeds").map(function(p) { return p.id; });
+    const rankStart = 10000;
+    const rankPayload = {};
+
+    allSids.forEach(function(id, i) { rankPayload[id] = rankStart - i; });
+    allEids.forEach(function(id, i) { rankPayload[id] = rankStart - i; });
+
+    const togglePayload = {};
+    Object.entries(config.sources).forEach(function(e) {
+      var id = e[0], cfg = e[1];
+      if (cfg.disabled !== undefined || cfg.rank !== undefined) {
+        if (!togglePayload[id]) togglePayload[id] = {};
+        if (cfg.disabled !== undefined) togglePayload[id].disabled = cfg.disabled;
+        if (cfg.rank !== undefined) togglePayload[id].rank = cfg.rank;
+        else if (rankPayload[id]) togglePayload[id].rank = rankPayload[id];
+      }
+    });
+    Object.keys(config.embeds).forEach(function(id) {
+      var cfg = config.embeds[id];
+      if (cfg.disabled !== undefined || cfg.rank !== undefined) {
+        if (!togglePayload[id]) togglePayload[id] = {};
+        if (cfg.disabled !== undefined) togglePayload[id].disabled = cfg.disabled;
+        if (cfg.rank !== undefined) togglePayload[id].rank = cfg.rank;
+        else if (rankPayload[id]) togglePayload[id].rank = rankPayload[id];
+      }
+    });
+
+    await fetch("/api/providers/order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "sources", ids: allSids }),
+    });
+    await fetch("/api/providers/order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "embeds", ids: allEids }),
+    });
+
+    for (var id of Object.keys(config.sources)) {
+      var cfg = config.sources[id];
+      if (cfg.disabled !== undefined) {
+        await fetch("/api/providers/toggle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: id, type: "source", disabled: cfg.disabled }),
+        });
+      }
+    }
+    for (var id of Object.keys(config.embeds)) {
+      var cfg = config.embeds[id];
+      if (cfg.disabled !== undefined) {
+        await fetch("/api/providers/toggle", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: id, type: "embed", disabled: cfg.disabled }),
+        });
+      }
+    }
+    for (var id of Object.keys(config.sources)) {
+      var r = config.sources[id].rank;
+      if (r != null) {
+        await fetch("/api/providers/rank", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: id, type: "source", rank: r }),
+        });
+      }
+    }
+    for (var id of Object.keys(config.embeds)) {
+      var r = config.embeds[id].rank;
+      if (r != null) {
+        await fetch("/api/providers/rank", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: id, type: "embed", rank: r }),
+        });
+      }
+    }
+
+    status.textContent = "Saved at " + new Date().toLocaleTimeString();
+    toast.textContent = "Saved!";
+    toast.classList.add("show");
+    setTimeout(function() { toast.classList.remove("show"); }, 1500);
+    saveTimer = null;
+  } catch (e) {
+    status.textContent = "Save failed: " + e.message;
+    toast.textContent = "Error: " + e.message;
+    toast.classList.add("show");
+  }
+}
+
+async function resetAll() {
+  if (!confirm("Reset ALL provider settings to defaults?")) return;
+  var toast = document.getElementById("toast");
+  try {
+    document.getElementById("status").textContent = "Resetting...";
+    await fetch("/api/providers/reset");
+    var newConfig = { sources: {}, embeds: {}, sourceOrder: [] };
+    config = newConfig;
+    render();
+    document.getElementById("status").textContent = "Reset to defaults";
+    toast.textContent = "Reset to defaults";
+    toast.classList.add("show");
+    setTimeout(function() { toast.classList.remove("show"); }, 1500);
+  } catch (e) {
+    toast.textContent = "Reset failed: " + e.message;
+    toast.classList.add("show");
+  }
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll(".tab").forEach(function(t) { t.classList.remove("active"); });
+  document.getElementById("tab-" + tab).classList.add("active");
+  document.getElementById("sources-section").style.display = tab === "sources" ? "block" : "none";
+  document.getElementById("embeds-section").style.display = tab === "embeds" ? "block" : "none";
+  render();
+}
+
+loadProviders();
+</script>
+</body>
+</html>
