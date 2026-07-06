@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Providers Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f0f0f; color: #e0e0e0; padding: 20px;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 20px; color: #fff; }
+  h2 { font-size: 1.1rem; margin: 20px 0 10px; color: #aaa; }
+  .tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+  .tab {
+    padding: 8px 20px; border-radius: 8px; cursor: pointer;
+    background: #1a1a1a; border: 1px solid #333; color: #888;
+    font-size: 0.9rem;
+  }
+  .tab.active { background: #333; color: #fff; border-color: #555; }
+  .provider { display: flex; align-items: center; gap: 12px; padding: 10px 12px; background: #1a1a1a; border-radius: 8px; margin-bottom: 6px; border: 1px solid #222; }
+  .provider.disabled-row { opacity: 0.5; }
+  .provider .handle { cursor: grab; color: #555; font-size: 1.1rem; user-select: none; width: 20px; text-align: center; }
+  .provider .info { flex: 1; }
+  .provider .name { font-weight: 600; font-size: 0.95rem; color: #fff; }
+  .provider .meta { font-size: 0.75rem; color: #666; margin-top: 2px; }
+  .provider .flags { display: inline-flex; gap: 4px; margin-left: 8px; }
+  .provider .flag { font-size: 0.65rem; padding: 1px 5px; border-radius: 4px; background: #2a2a2a; color: #888; }
+  .provider .rank { font-size: 0.75rem; color: #555; min-width: 40px; text-align: right; }
+  .provider .actions { display: flex; gap: 6px; }
+  .provider .actions button {
+    background: none; border: 1px solid #333; color: #888; cursor: pointer;
+    padding: 4px 10px; border-radius: 6px; font-size: 0.8rem; transition: 0.15s;
+  }
+  .provider .actions button:hover { border-color: #555; color: #fff; }
+  .provider .actions button.danger { color: #ff4444; border-color: #442222; }
+  .provider .actions button.danger:hover { border-color: #ff4444; }
+  .provider .actions button.enabled { color: #4caf50; border-color: #1a4a1a; }
+  .provider .actions button.enabled:hover { border-color: #4caf50; }
+  .header-actions { display: flex; gap: 10px; margin-bottom: 15px; }
+  .header-actions button {
+    padding: 6px 16px; border-radius: 6px; cursor: pointer;
+    border: 1px solid #333; background: #1a1a1a; color: #aaa; font-size: 0.85rem;
+  }
+  .header-actions button:hover { border-color: #555; color: #fff; }
+  .search {
+    width: 100%; padding: 10px 14px; border-radius: 8px; border: 1px solid #333;
+    background: #1a1a1a; color: #e0e0e0; font-size: 0.9rem; margin-bottom: 15px;
+    outline: none;
+  }
+  .search:focus { border-color: #555; }
+  .toast {
+    position: fixed; bottom: 20px; right: 20px; padding: 10px 20px;
+    border-radius: 8px; background: #333; color: #fff; font-size: 0.85rem;
+    opacity: 0; transition: opacity 0.3s; z-index: 100;
+  }
+  .toast.show { opacity: 1; }
+  .count { font-size: 0.8rem; color: #555; margin-bottom: 10px; }
+  .rename-trigger { cursor: pointer; border-bottom: 1px dashed #555; }
+  .rename-trigger:hover { border-color: #888; }
+  .rename-input { display: inline-flex; align-items: center; gap: 4px; }
+  .rename-input input {
+    background: #2a2a2a; border: 1px solid #555; color: #fff; padding: 2px 6px;
+    border-radius: 4px; font-size: 0.9rem; width: 140px; outline: none;
+  }
+  .rename-input input:focus { border-color: #888; }
+  .rename-input button {
+    background: #333; border: 1px solid #555; color: #fff; cursor: pointer;
+    padding: 2px 8px; border-radius: 4px; font-size: 0.75rem;
+  }
+  .rename-input button:hover { background: #444; }
+</style>
+</head>
+<body>
+<h1>&#x2699; Providers Dashboard</h1>
+
+<div class="header-actions">
+  <button onclick="saveConfig()">&#x1F4BE; Save to Server</button>
+  <button onclick="resetConfig()">&#x21BA; Reset to Defaults</button>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('sources')" id="tab-sources">Sources</div>
+  <div class="tab" onclick="switchTab('embeds')" id="tab-embeds">Embeds</div>
+</div>
+
+<input class="search" id="search" placeholder="Search providers..." oninput="render()" />
+
+<div id="sources-section">
+  <div class="count" id="source-count"></div>
+  <div id="source-list"></div>
+</div>
+<div id="embeds-section" style="display:none">
+  <div class="count" id="embed-count"></div>
+  <div id="embed-list"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let data = { sources: [], embeds: [] };
+let config = { sources: {}, embeds: {}, sourceOrder: [] };
+let currentTab = "sources";
+
+async function loadProviders() {
+  const [provRes, configRes] = await Promise.all([
+    fetch("/api/providers"),
+    fetch("/api/providers/config"),
+  ]);
+  data = await provRes.json();
+  config = await configRes.json();
+  render();
+}
+
+function getSorted(type) {
+  const items = type === "sources" ? [...data.sources] : [...data.embeds];
+  const configKey = type === "sources" ? "sources" : "embeds";
+  return items.sort((a, b) => {
+    const ra = config[configKey][a.id]?.rank ?? a.rank;
+    const rb = config[configKey][b.id]?.rank ?? b.rank;
+    return rb - ra;
+  });
+}
+
+function render() {
+  const query = document.getElementById("search").value.toLowerCase();
+  const isSources = currentTab === "sources";
+
+  const sources = getSorted("sources").filter(p =>
+    p.name.toLowerCase().includes(query) || p.id.toLowerCase().includes(query)
+  );
+  const embeds = getSorted("embeds").filter(p =>
+    p.name.toLowerCase().includes(query) || p.id.toLowerCase().includes(query)
+  );
+
+  document.getElementById("source-count").textContent = `${sources.length} sources`;
+  document.getElementById("embed-count").textContent = `${embeds.length} embeds`;
+
+    renderList("source-list", sources, "source");
+  renderList("embed-list", embeds, "embed");
+}
+
+function renderList(containerId, items, type) {
+  const container = document.getElementById(containerId);
+  const configKey = type === "source" ? "sources" : "embeds";
+  container.innerHTML = items.map((p, idx) => {
+    const userDisabled = config[configKey][p.id]?.disabled ?? false;
+    const effectiveDisabled = p.disabled || userDisabled;
+    const displayName = p.customName || p.name;
+    return `<div class="provider${effectiveDisabled ? ' disabled-row' : ''}" data-id="${p.id}" data-type="${type}">
+      <div class="handle" onclick="moveUp('${p.id}','${type}')" title="Move up">&#x25B2;</div>
+      <div class="handle" onclick="moveDown('${p.id}','${type}')" title="Move down">&#x25BC;</div>
+      <div class="info">
+        <div class="name">
+          <span class="rename-trigger" onclick="startRename('${p.id}','${type}')" title="Click to rename">${escHtml(displayName)}</span>
+          <span class="rename-input" style="display:none">
+            <input type="text" id="rename-input-${p.id}" value="${escHtml(displayName)}" onkeydown="renameKeydown(event,'${p.id}','${type}')" />
+            <button onclick="confirmRename('${p.id}','${type}')">Save</button>
+          </span>
+          <span class="flags">${(p.flags||[]).map(f => `<span class="flag">${f}</span>`).join('')}</span>
+        </div>
+        <div class="meta">${p.id}${p.externalSource ? ' &middot; external' : ''}</div>
+      </div>
+      <div class="rank">${config[configKey][p.id]?.rank ?? p.rank}</div>
+      <div class="actions">
+        <button class="${userDisabled ? 'enabled' : 'danger'}" onclick="toggle('${p.id}','${type}')">
+          ${userDisabled ? '&#x2713; Enable' : '&#x2715; Disable'}
+        </button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function startRename(id, type) {
+  document.querySelectorAll(".rename-trigger, .rename-input").forEach(el => el.style.display = "");
+  const trigger = document.querySelector(`.provider[data-id="${id}"] .rename-trigger`);
+  const input = document.querySelector(`.provider[data-id="${id}"] .rename-input`);
+  if (trigger) trigger.style.display = "none";
+  if (input) { input.style.display = "inline-flex"; input.querySelector("input").focus(); }
+}
+
+function renameKeydown(e, id, type) {
+  if (e.key === "Enter") confirmRename(id, type);
+  if (e.key === "Escape") cancelRename(id);
+}
+
+function confirmRename(id, type) {
+  const input = document.getElementById("rename-input-" + id);
+  if (!input) return;
+  const newName = input.value.trim();
+  const configKey = type === "source" ? "sources" : "embeds";
+  config[configKey][id] = { ...(config[configKey][id] || {}), name: newName || undefined };
+  render();
+}
+
+function cancelRename(id) {
+  render();
+}
+
+function moveUp(id, type) {
+  const configKey = type === "source" ? "sources" : "embeds";
+  const items = getSorted(type + "s");
+  const idx = items.findIndex(p => p.id === id);
+  if (idx <= 0) return;
+  swap(items, idx, idx - 1, configKey);
+  render();
+}
+
+function moveDown(id, type) {
+  const configKey = type === "source" ? "sources" : "embeds";
+  const items = getSorted(type + "s");
+  const idx = items.findIndex(p => p.id === id);
+  if (idx < 0 || idx >= items.length - 1) return;
+  swap(items, idx, idx + 1, configKey);
+  render();
+}
+
+function swap(items, i, j, configKey) {
+  const a = items[i];
+  const b = items[j];
+  const aRank = config[configKey][a.id]?.rank ?? a.rank;
+  const bRank = config[configKey][b.id]?.rank ?? b.rank;
+  config[configKey][a.id] = { ...(config[configKey][a.id] || {}), rank: bRank };
+  config[configKey][b.id] = { ...(config[configKey][b.id] || {}), rank: aRank };
+}
+
+function toggle(id, type) {
+  const configKey = type === "source" ? "sources" : "embeds";
+  const current = config[configKey][id]?.disabled ?? false;
+  config[configKey][id] = { ...(config[configKey][id] || {}), disabled: !current };
+  render();
+}
+
+async function saveConfig() {
+  const toast = document.getElementById("toast");
+  try {
+    const allIds = getSorted("sources").map(p => p.id);
+    await fetch("/api/providers/order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "sources", ids: allIds }),
+    });
+    await fetch("/api/providers/order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "embeds", ids: getSorted("embeds").map(p => p.id) }),
+    });
+    for (const [id, cfg] of Object.entries(config.sources)) {
+      await fetch("/api/providers/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, type: "source", disabled: cfg.disabled }),
+      });
+    }
+    for (const [id, cfg] of Object.entries(config.embeds)) {
+      await fetch("/api/providers/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, type: "embed", disabled: cfg.disabled }),
+      });
+    }
+    for (const [id, cfg] of Object.entries(config.sources)) {
+      if (cfg.rank) {
+        await fetch("/api/providers/rank", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, type: "source", rank: cfg.rank }),
+        });
+      }
+    }
+    for (const [id, cfg] of Object.entries(config.embeds)) {
+      if (cfg.rank) {
+        await fetch("/api/providers/rank", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, type: "embed", rank: cfg.rank }),
+        });
+      }
+    }
+    for (const [id, cfg] of Object.entries(config.sources)) {
+      if (cfg.name) {
+        await fetch("/api/providers/rename", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, type: "source", name: cfg.name }),
+        });
+      }
+    }
+    for (const [id, cfg] of Object.entries(config.embeds)) {
+      if (cfg.name) {
+        await fetch("/api/providers/rename", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, type: "embed", name: cfg.name }),
+        });
+      }
+    }
+    toast.textContent = "Configuration saved!";
+    toast.classList.add("show");
+    setTimeout(() => toast.classList.remove("show"), 2000);
+  } catch (e) {
+    toast.textContent = "Failed to save: " + e.message;
+    toast.classList.add("show");
+  }
+}
+
+async function resetConfig() {
+  if (!confirm("Reset all provider settings to defaults?")) return;
+  await fetch("/api/providers/reset");
+  config = { sources: {}, embeds: {}, sourceOrder: [] };
+  render();
+  const toast = document.getElementById("toast");
+  toast.textContent = "Reset to defaults";
+  toast.classList.add("show");
+  setTimeout(() => toast.classList.remove("show"), 2000);
+}
+
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.getElementById("tab-" + tab).classList.add("active");
+  document.getElementById("sources-section").style.display = tab === "sources" ? "block" : "none";
+  document.getElementById("embeds-section").style.display = tab === "embeds" ? "block" : "none";
+  render();
+}
+
+loadProviders();
+</script>
+</body>
+</html>

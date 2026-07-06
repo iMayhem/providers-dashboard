@@ -1,0 +1,12 @@
+{
+  "name": "providers-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "@movie-web/providers": "github:steveyout/providers"
+  }
+}
